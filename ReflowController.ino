@@ -1,7 +1,7 @@
 /* Reflow Oven Controller
  2016 Lukas Jaworski
  based on the Reflow Controller by Karl Pitrich
-  v 0.5.1
+  v 0.7.2
 */ 
 
 //-----------------------------------------------------------------------------
@@ -28,6 +28,7 @@
 #include <Adafruit_ST7735.h>
 #include <SPI.h>
 #include <TimerOne.h>
+#include <Servo.h>
 #ifdef AUTOPID
   #include <PID_AutoTune_v0.h>
 #endif
@@ -48,7 +49,7 @@
 
 // Thermocouple via SPI-MAX31855
 #define THERMOCOUPLE1_CS  5
-//#define THERMOCOUPLE2_CS  4 //include later
+#define THERMOCOUPLE2_CS  4 //include later
 
 //  Heater Solid State Relays
 
@@ -191,6 +192,10 @@ uint8_t				usecPerZX = 83;//8.3ms (or 83 ticks @ 100us/tick) between ZeroX for 6
 									//This value will be updated if a calibration is performed.
 Thermocouple		thermoInput1; //intialize thermocouple 1
 // Thermocouple		thermoInput2; //intialize thermocouple 2
+uint8_t				servoPos = 0;
+Servo				doorServo;
+const uint32_t 		thermoUpdateTime = 250;
+uint32_t			lastThermoUpdate;
 reflowProfile		curProfile = {1.1, 135.0, 0.6, 165.0, 1.3, 225.0, 2.0, 50.0}; //the current reflow profile (also the only)
 PIDprofile			curPIDprofile = {{1.1, 0.5, 30},{1.0, 0.1, 35.0},{3.0, 0.5, 5.0},{7.0, 0.01, 2.0}}; /*{{1.1, 0.101, 17.0},{1.0, 0.1, 18.0},{1.1, 0.1, 17.0},{7.0, 0.01, 2.0}}; //Profile of PID constants */
 currentParameters	curParameters; //the current temp, setpoint, and pid output
@@ -250,12 +255,14 @@ void readThermocouple(Thermocouple* input, volatile errorCode& ErrorCode) { //fu
 
 void openDoor(void){ //currently a dummy function
 	//use servo to open door fully
+	digitalWrite(RED, HIGH);
+	doorServo.write(180);
 	
 }
 
 void closeDoor(void){//currently a dummy function
 	//use servo to fully close door
-	
+	doorServo.write(0);
 }
 
 void indicateDone(bool errorFlag = false){//currently a dummy function
@@ -265,8 +272,14 @@ void indicateDone(bool errorFlag = false){//currently a dummy function
 
 void updateSetpoints(reflowState& ovenState, reflowProfile Profile, currentParameters& Params, PID& PID, PIDprofile PIDprofile){ //This function updates the setpoints of the reflow profile at the specified updateTime (which is counted in 100usec ticks)
 	uint32_t timeSinceUpdate = timerTicks-lastTimerTicks;
-	
+	// Serial.print("timeSinceUpdate: ");
+	// Serial.println(timeSinceUpdate);
+	// Serial.print("timerTicks: ");
+	// Serial.println(timerTicks);
+	// Serial.print("lastTimerTicks: ");
+	// Serial.println(lastTimerTicks);
 	if (timeSinceUpdate>updateTime){
+		// Serial.println("updating");
 		if (ovenState>Idle && ovenState<RampDown){
 			switch(ovenState) {
 				case RampToSoak:
@@ -292,7 +305,7 @@ void updateSetpoints(reflowState& ovenState, reflowProfile Profile, currentParam
 						Params.PID_output = 0;
 					}
 					if (Params.setpoint > Profile.peakTemp){
-						digitalWrite(12, HIGH); //turns on an LED to indicate that the peaksetpoint was reached and the door of the oven needs to be opened (I currently open it manually but the plan is to have a servo do it in the future)
+						openDoor();
 						ovenState = RampDown;
 						PID.SetTunings(curPIDprofile.coolDown.Kp,curPIDprofile.coolDown.Kp,curPIDprofile.coolDown.Kp);
 					}
@@ -312,7 +325,6 @@ void updateSetpoints(reflowState& ovenState, reflowProfile Profile, currentParam
 				
 				case CoolDown:
 					Params.setpoint = 0.0;
-					//openDoor();
 					ovenState = Complete;
 				break;
 			}
@@ -330,40 +342,76 @@ void updateSetpoints(reflowState& ovenState, reflowProfile Profile, currentParam
 }
 
 void rollAverage(rollingAvg& rollAvg, currentParameters& Params, volatile errorCode& ErrorCode){//takes a new temperature reading and averages it with the previous 9 readings, this function pulls the temperatures as fast as the function is reached
+	uint32_t timeSinceUpdate = timerTicks-lastThermoUpdate;
 	static uint8_t errorTempCount = 0;
 	double curReading;
-	readThermocouple(&thermoInput1, ErrorCode);
-	curReading = thermoInput1.temperature;
-	if ((curReading - Params.avgTemp) > 10 || (curReading - Params.avgTemp) < -10){//this checks if an individual reading is more than 10C different than the average, indicating a bad reading (should be impossible to move that much in a couple ms)
-		errorTempCount += 3;
-		if (errorTempCount >= 15){//only throw an error if the bad readings get excessive
-			ErrorCode = BadReadings;
-			return;
+	if (timeSinceUpdate>thermoUpdateTime){
+		readThermocouple(&thermoInput1, ErrorCode);
+		curReading = thermoInput1.temperature;
+		if ((curReading - Params.avgTemp) > 10 || (curReading - Params.avgTemp) < -10){//this checks if an individual reading is more than 10C different than the average, indicating a bad reading (should be impossible to move that much in a couple ms)
+			errorTempCount += 3;
+			if (errorTempCount >= 15){//only throw an error if the bad readings get excessive
+				ErrorCode = BadReadings;
+				return;
+			}
 		}
-	}
-	else if (errorTempCount > 0){
-		errorTempCount --;
+		else if (errorTempCount > 0){
+			errorTempCount --;
+		}
+		
+		//the next few lines handle the averaging of the temperature *note that only one value is removed and added at a time to save caluclation cycles
+		
+		Params.avgTemp -= rollAvg.temps[rollAvg.position]/10.0; //removes the reading that was at this postion previousl (the average adjusted amount)
+		rollAvg.temps[rollAvg.position] = curReading;
+		Params.avgTemp += curReading/10.0; //adds in the current reading into the average
+		rollAvg.position ++;
+		if (rollAvg.position > 9){
+			rollAvg.position = 0;
+		}
+		curReading = Params.avgTemp - Params.setpoint;//repurpose the curReading variable to see if the current average is too far from the setpoint
+		if (curReading>50.0 || curReading<-50.0){
+			if (curReading>10){
+				ErrorCode = OverTemp;
+				if (curOvenState>=RampDown && curOvenState<=Complete){
+					ErrorCode = NoError;
+				}
+			}
+			else{
+				ErrorCode = UnderTemp;
+			}
+		}
+		lastThermoUpdate = timerTicks;
 	}
 	
-	//the next few lines handle the averaging of the temperature *note that only one value is removed and added at a time to save caluclation cycles
-	
-	Params.avgTemp -= rollAvg.temps[rollAvg.position]/10.0; //removes the reading that was at this postion previousl (the average adjusted amount)
-	rollAvg.temps[rollAvg.position] = curReading;
-	Params.avgTemp += curReading/10.0; //adds in the current reading into the average
-	rollAvg.position ++;
-	if (rollAvg.position > 9){
-		rollAvg.position = 0;
-	}
-    curReading = Params.avgTemp - Params.setpoint;//repurpose the curReading variable to see if the current average is too far from the setpoint
-    if (curReading>50.0 || curReading<-50.0){
-        if (curReading>10){
-            ErrorCode = OverTemp;
-        }
-        else{
-            ErrorCode = UnderTemp;
-        }
-    }
-	
+}
+
+void pinSetup(){
+	pinMode(THERMOCOUPLE1_CS, OUTPUT);
+	digitalWrite(THERMOCOUPLE1_CS, HIGH);
+	pinMode(THERMOCOUPLE2_CS, OUTPUT);
+	digitalWrite(THERMOCOUPLE2_CS, HIGH);
+	pinMode(PIN_HEATER_BOTTOM, OUTPUT);
+	digitalWrite(PIN_HEATER_BOTTOM, LOW);
+	pinMode(PIN_HEATER_TOP, OUTPUT);
+	digitalWrite(PIN_HEATER_TOP, LOW);
+	pinMode(PIN_FAN, OUTPUT);
+	digitalWrite(PIN_FAN, LOW);
+	pinMode(RED, OUTPUT);
+	digitalWrite(RED, LOW);
+	// pinMode(GREEN, OUTPUT);
+	// digitalWrite(GREEN, LOW);
+	pinMode(LCD_CS, OUTPUT);
+	digitalWrite(LCD_CS, HIGH);
+	pinMode(SD_CS, OUTPUT);
+	digitalWrite(SD_CS, HIGH);
+	pinMode(LCD_OC, OUTPUT);
+	digitalWrite(LCD_OC, LOW);
+	pinMode(LCD_RST, OUTPUT);
+	digitalWrite(LCD_RST, LOW);
+	pinMode(ROTARY_A, INPUT);
+	pinMode(ROTARY_B, INPUT);
+	pinMode(SW_PUSH, INPUT);
+	doorServo.attach(PIN_SERVO);
 }
 
 double initalTemp(rollingAvg& rollAvg, volatile errorCode ErrorCode){//Gets an intial value for the oven temperature
@@ -372,8 +420,9 @@ double initalTemp(rollingAvg& rollAvg, volatile errorCode ErrorCode){//Gets an i
 		readThermocouple(&thermoInput1, ErrorCode);
 		rollAvg.temps[i] = thermoInput1.temperature;
 		averageTemp += thermoInput1.temperature/10.0;
-		delay(100);
+		delay(25);
 	}
+	lastThermoUpdate = timerTicks;
 	return averageTemp;
 }
 
@@ -408,54 +457,57 @@ void updatePID(PID& PID, currentParameters Params, volatile cyclCount& cycleSet,
 }
 
 void checkErrors(volatile errorCode ErrorCode){//This function checks for any reflow ending errors, shuts off the oven, and spits out an error code
-    if (ErrorCode){
-		cli();//interrupts are no longer need at this point so they are disabled
-		digitalWrite(PIN_HEATER_BOTTOM, LOW); //Turns off the heating elements
-        switch(ErrorCode){
-            case UnderTemp:
-                while(1){
-                    Serial.println("UT"); //Undertemp
-					delay(1000);
-                }
-				break;
-            case OverTemp:
-                while(1){
-                    Serial.println("OT"); //Overtemp
-					delay(1000);
-                }
-				break;
-            case BadReadings:
-                while(1){
-                    Serial.println("BR"); //Too many bad readings from the MAX31855
-					delay(1000);
-                }
-				break;
-            case NoMAX:
-                while(1){
-                    Serial.println("NM"); //no MAX31855 detected
-					delay(1000);
-                }
-				break;
-            case VccShort:
-                while(1){
-                    Serial.println("VS"); //MAX31855 Vcc short error
-					delay(1000);
-                }
-				break;
-            case GndShort:
-                while(1){
-                    Serial.println("GS");//MAX31855 Gnd short error
-					delay(1000);
-                }
-				break;
-            case OpenCircuit:
-                while(1){
-                    Serial.println("OC");//MAX31855 Open Circuit error
-					delay(1000);
-                }
-				break;
-        }
-    }
+    if (curOvenState != Idle || curOvenState != Complete){
+		if (ErrorCode){
+			cli();//interrupts are no longer need at this point so they are disabled
+			digitalWrite(PIN_HEATER_BOTTOM, LOW); //Turns off the heating elements
+			switch(ErrorCode){
+				case UnderTemp:
+					while(1){
+						Serial.println("UT"); //Undertemp
+						delay(1000);
+					}
+					break;
+				case OverTemp:
+					while(1){
+						Serial.println("OT"); //Overtemp
+						delay(1000);
+					}
+					break;
+				case BadReadings:
+					while(1){
+						Serial.println("BR"); //Too many bad readings from the MAX31855
+						delay(1000);
+					}
+					break;
+				case NoMAX:
+					while(1){
+						Serial.println("NM"); //no MAX31855 detected
+						delay(1000);
+					}
+					break;
+				case VccShort:
+					while(1){
+						Serial.println("VS"); //MAX31855 Vcc short error
+						delay(1000);
+					}
+					break;
+				case GndShort:
+					while(1){
+						Serial.println("GS");//MAX31855 Gnd short error
+						delay(1000);
+					}
+					break;
+				case OpenCircuit:
+					while(1){
+						Serial.println("OC");//MAX31855 Open Circuit error
+						delay(1000);
+					}
+					break;
+			}
+		}
+
+	}
 }
 
 //-------------------------------------------------------------------------------
@@ -563,15 +615,14 @@ void setup(){
 	usecPerZX = int(calibrationAvg);
 #endif
 	thermoInput1.chipSelect = THERMOCOUPLE1_CS;
-	pinMode(thermoInput1.chipSelect, OUTPUT);
-	pinMode(PIN_HEATER_BOTTOM, OUTPUT);
-	pinMode(12, OUTPUT);
-	digitalWrite(12, LOW);
+	pinSetup();
+	closeDoor();
 	curOvenState = RampToSoak;
+	Timer1.initialize(uSecPerTick);
+	Timer1.attachInterrupt(timerISR);
 	curParameters.avgTemp = initalTemp(curRollingAvg, curError);
 	curParameters.setpoint = curParameters.avgTemp;
 	tempPID.SetOutputLimits(0, 33); // set output of heaters, since the heaters can only respont to 3% incraments the range here is set from 0-33 and is later multiplied by 3
-	Timer1.attachInterrupt(timerISR);
 	lastTimerTicks = timerTicks; //counts in 100usec ticks
     lastPIDticks = millis(); //counts in ms
 	tempPID.SetMode(AUTOMATIC);
