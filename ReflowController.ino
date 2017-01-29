@@ -9,7 +9,7 @@
 //-----------------------------------------------------------------------------
 
 // #define AUTOPID true // autotune PID parameters
-#define ZERO_X_CALIBRATION true
+#define ZERO_X_CALIBRATION True
 
 #ifdef ZERO_X_CALIBRATION
 	#define CALIBRATION_CYCLES 12 //set how many calibration cyles are desired, the first two and last readings are thrown out due to inconsistant readings because of intialization and shutdown
@@ -19,10 +19,7 @@
 //File Depencencies
 //-----------------------------------------------------------------------------
 
-#include "helpers.h"
 #include <avr/io.h>
-// #include <avr/eeprom.h>
-// #include <EEPROM.h>
 #include <PID_v1.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7735.h>
@@ -30,7 +27,7 @@
 #include <TimerOne.h>
 #include <Servo.h>
 #ifdef AUTOPID
-  #include <PID_AutoTune_v0.h>
+	#include <PID_AutoTune_v0.h>
 #endif
 
 // ----------------------------------------------------------------------------
@@ -39,27 +36,27 @@
 
 // 1.8" TFT via SPI
 
-#define LCD_CS   10
-#define LCD_OC   A2
-#define LCD_RST  A3
-#define SD_CS	 A0
+#define LCD_CS	10
+#define LCD_OC	A2
+#define LCD_RST	A3
+#define SD_CS	A0
 
 
 // Thermocouples
 
 // Thermocouple via SPI-MAX31855
-#define THERMOCOUPLE1_CS  5
-#define THERMOCOUPLE2_CS  4 //include later
+#define THERMOCOUPLE1_CS	5
+#define THERMOCOUPLE2_CS	4//include later
 
 //  Heater Solid State Relays
 
-#define PIN_HEATER_TOP   9 // SSR for the top heating elements- separate later
-#define PIN_HEATER_BOTTOM 8 // SSR for the bottom heating elements
+#define PIN_HEATER_TOP		9// SSR for the top heating elements- separate later
+#define PIN_HEATER_BOTTOM	8// SSR for the bottom heating elements
 
 //fan relay &| servo 
 
-#define PIN_FAN      A1 // SSR for the fan- This reflow oven has no fan
-#define PIN_SERVO     7 // servo control signal
+#define PIN_FAN		A1// SSR for the fan- This reflow oven has no fan
+#define PIN_SERVO	7// servo control signal
 
 // Rotary Encoder
 
@@ -69,46 +66,45 @@
 
 // Zero Crossing Detector
 
-#define PIN_ZX       3 // pin for zero crossing detector
-#define INT_ZX       digitalPinToInterrupt(PIN_ZX) // interrupt for zero crossing detector
+#define PIN_ZX		3 // pin for zero crossing detector
+#define INT_ZX		digitalPinToInterrupt(PIN_ZX) // interrupt for zero crossing detector
 
 // Indicator Light
 
-#define RED 6
-#define GREEN 0
+#define RED		6
+#define GREEN	0
 
 //-----------------------------------------------------------------------------
 // Profiles
 //-----------------------------------------------------------------------------
-
 typedef struct reflowProfile { //a complete reflow profile in terms temperaturs and temperature rates
-  double rampSoakRate;	//ramp to soak in degC/s
-  double soakLowTemp;	//temp in degC to start soak
-  double soakRate;		//gentle ramp during soak in degC/s
-  double soakHighTemp;	//temp in degC to stop soak and ramp to peak
-  double rampPeakRate;	//ramp to peak in degC/s
-  double peakTemp;		//peak temp in degC
-  double coolDownRate;	//cooling rate in degC/s
-  double safeTemp;		//temp in degC where oven is cool enough to work with
+	double	rampSoakRate;	//ramp to soak in degC/s
+	double	soakLowTemp;	//temp in degC to start soak
+	double	soakRate;		//gentle ramp during soak in degC/s
+	double	soakHighTemp;	//temp in degC to stop soak and ramp to peak
+	double	rampPeakRate;	//ramp to peak in degC/s
+	double	peakTemp;		//peak temp in degC
+	double	coolDownRate;	//cooling rate in degC/s
+	double	safeTemp;		//temp in degC where oven is cool enough to work with
 } reflowProfile;
 
 typedef struct PID_constants { //a collection of PID constants
-  double Kp;
-  double Ki;
-  double Kd;
+	double	Kp;
+	double	Ki;
+	double	Kd;
 } PID_constants;
 
 typedef struct PIDprofile { //a profile to adjust PID constants during reflow
-  PID_constants rampSoak;
-  PID_constants soak;
-  PID_constants rampPeak;
-  PID_constants coolDown;
+	PID_constants	rampSoak;
+	PID_constants	soak;
+	PID_constants	rampPeak;
+	PID_constants	coolDown;
 } PIDprofile;
 
 typedef struct currentParameters { //PID Input, Setpoint, and Output respectively
-	double avgTemp;
-	double setpoint;
-	double PID_output;
+	double	avgTemp;
+	double	setpoint;
+	double	PID_output;
 } currentParameters;
 
 //-----------------------------------------------------------------------------
@@ -116,18 +112,18 @@ typedef struct currentParameters { //PID Input, Setpoint, and Output respectivel
 //-----------------------------------------------------------------------------
 
 typedef enum reflowState { //state machine
-  None     = 0,
-  Idle     = 1,
-  
-  RampToSoak = 10,
-  Soak,
-  RampUp,
-  RampDown,
-  CoolDown,
-
-  Complete = 20,
-
-  Tune = 30
+	None     = 0,
+	Idle     = 1,
+	
+	RampToSoak = 10,
+	Soak,
+	RampUp,
+	RampDown,
+	CoolDown,
+	
+	Complete = 20,
+	
+	Tune = 30
 } reflowState;
 
 typedef enum errorCode { //handle all currently known error states of the reflow oven
@@ -143,10 +139,10 @@ typedef enum errorCode { //handle all currently known error states of the reflow
 
 
 typedef union MAX31855_t { // thermocouple temp & status data, directly from the MAX31855
-  uint32_t	value;
-  uint8_t	bytes[4];
-/*
-bits 31-18 hold the thermocouple data, 
+	uint32_t	value;
+	uint8_t		bytes[4];
+
+/*bits 31-18 hold the thermocouple data, 
 bit 16 holds the fault bit (0 if no fault and 1 if there is one), this is not used at all in the code,
 bits 15-4 hold the cold junction temperature, 
 bits 2-0 explain the fault
@@ -155,22 +151,22 @@ bits 2-0 explain the fault
  
 
 typedef struct Thermocouple { // processed thermocouple data, status, and CS pin of the MAX31855
-  double temperature;
-  uint8_t stat;
-  uint8_t chipSelect;
+	double	temperature;
+	uint8_t	stat;
+	uint8_t	chipSelect;
 } Thermocouple;
 
 typedef struct rollingAvg { //holds the last ten actual temperature readings used in claclulating the rolling average, and keeps track of which position in the array needs to be updated next
-	double temps[10];
-	uint8_t position = 0;
+	double	temps[10];
+	uint8_t	position = 0;
 } rollingAvg;
 
-typedef struct cyclCount {//the "cycle counter" is how the PID output is translated into heater on/off times
-	uint8_t tensPlace;
-	uint8_t thirds;
-	uint8_t positionThirds;
-	uint8_t positionTens;
-} cyclCount;
+typedef struct cycleCount {//the "cycle counter" is how the PID output is translated into heater on/off times
+	uint8_t	tensPlace;
+	uint8_t	thirds;
+	uint8_t	positionThirds;
+	uint8_t	positionTens;
+} cycleCount;
 
 //-------------------------------------------------------------------------------
 //Global Variables
@@ -186,7 +182,7 @@ volatile uint8_t	offTimerTicks = 0;
 volatile uint32_t	timerTicks = 0; //100usec timer keeper (no overflow detection)
 // volatile uint32_t	zeroXticks = 0; //counts the zero crossing events, used in PID control
 uint32_t			lastTimerTicks = 0;
-uint32_t            lastPIDticks = 0;//used to ensure that the PID computes every time a heating "cycle" is finnished
+uint32_t			lastPIDticks = 0;//used to ensure that the PID computes every time a heating "cycle" is finnished
 uint8_t				usecPerZX = 83;//8.3ms (or 83 ticks @ 100us/tick) between ZeroX for 60Hz mains, 
 									//sub in 10 for 50Hz. 
 									//This value will be updated if a calibration is performed.
@@ -194,15 +190,15 @@ Thermocouple		thermoInput1; //intialize thermocouple 1
 // Thermocouple		thermoInput2; //intialize thermocouple 2
 uint8_t				servoPos = 0;
 Servo				doorServo;
-const uint32_t 		thermoUpdateTime = 250;
+const uint32_t 		thermoUpdateTime = 250;//checks the temperature every 25ms so that it doesn't over tax the thermocouple IC
 uint32_t			lastThermoUpdate;
 reflowProfile		curProfile = {1.1, 135.0, 0.6, 165.0, 1.3, 225.0, 2.0, 50.0}; //the current reflow profile (also the only)
 PIDprofile			curPIDprofile = {{1.1, 0.5, 30},{1.0, 0.1, 35.0},{3.0, 0.5, 5.0},{7.0, 0.01, 2.0}}; /*{{1.1, 0.101, 17.0},{1.0, 0.1, 18.0},{1.1, 0.1, 17.0},{7.0, 0.01, 2.0}}; //Profile of PID constants */
 currentParameters	curParameters; //the current temp, setpoint, and pid output
 reflowState			curOvenState = None; //current phase of the reflow cycle
 rollingAvg			curRollingAvg; //a collection of past temp readings used in the rolling average
-volatile cyclCount	cycleCounter = {0, 0, 0, 0}; //used to control heater on/off timings
-volatile errorCode	curError = NoError;
+volatile cycleCount	cycleCounter = {0, 0, 0, 0}; //used to control heater on/off timings
+volatile errorCode	curError = NoError;//Error code variable that handles all errors in the machine
 
 PID					tempPID(&(curParameters.avgTemp),&(curParameters.PID_output),&(curParameters.setpoint),curPIDprofile.rampSoak.Kp,curPIDprofile.rampSoak.Kp,curPIDprofile.rampSoak.Kp,DIRECT);
 
@@ -219,50 +215,56 @@ PID					tempPID(&(curParameters.avgTemp),&(curParameters.PID_output),&(curParame
 //-----------------------------------------------------------------------------
 
 void readThermocouple(Thermocouple* input, volatile errorCode& ErrorCode) { //function to read the data from the MAX31855 and handle any errors that may arrise
-  MAX31855_t readSensor;
+	MAX31855_t readSensor;
 
-  // uint8_t lcdState = digitalRead(LCD_CS);
-  // digitalWrite(LCD_CS, HIGH);
-  SPI.beginTransaction(SPISettings(4000000,MSBFIRST,SPI_MODE0));
-  digitalWrite(input->chipSelect, LOW);
-  for (int8_t i = 3; i >= 0; i--){
-    readSensor.bytes[i] = SPI.transfer(0);
-  }
-  digitalWrite(input->chipSelect, HIGH);
-  SPI.endTransaction();
-  if (readSensor.value == 0){ //if nothing but zeroes is read then the MAX31855 is not connected or there is something seriously wrong, error is thrown
-    ErrorCode = NoMAX;
-    return;
-  }
-  input->stat = readSensor.bytes[0] & 0b111;
-  if (input->stat){//this is the error handling portion which reads the MAX31855 error codes and passes them along to the main program
-    switch (input->stat) {
-      case 0b001:
-        ErrorCode = OpenCircuit;
-        return;
-      case 0b010:
-        ErrorCode = GndShort;
-        return;
-      case 0b100:
-        ErrorCode = VccShort;
-        return;
-    }
-  }
-  uint16_t value = (readSensor.value >> 18) & 0x3FFF; //shift to the correct alignment for the temp data  
-  input->temperature = (double) value * 0.25;
-  // digitalWrite(LCD_CS, lcdState);
+	// uint8_t lcdState = digitalRead(LCD_CS);
+	// digitalWrite(LCD_CS, HIGH);
+	SPI.beginTransaction(SPISettings(4000000,MSBFIRST,SPI_MODE0));
+	digitalWrite(input->chipSelect, LOW);
+	for (int8_t i = 3; i >= 0; i--){
+		readSensor.bytes[i] = SPI.transfer(0);
+	}
+	digitalWrite(input->chipSelect, HIGH);
+	SPI.endTransaction();
+	if (readSensor.value == 0){ //if nothing but zeroes is read then the MAX31855 is not connected or there is something seriously wrong, error is thrown
+		ErrorCode = NoMAX;
+	return;
+	}
+	input->stat = readSensor.bytes[0] & 0b111;
+	if (input->stat){//this is the error handling portion which reads the MAX31855 error codes and passes them along to the main program
+		switch (input->stat) {
+			case 0b001:
+				ErrorCode = OpenCircuit;
+				return;
+			case 0b010:
+				ErrorCode = GndShort;
+				return;
+			case 0b100:
+				ErrorCode = VccShort;
+				return;
+		}
+	}
+	uint16_t value = (readSensor.value >> 18) & 0x3FFF; //shift to the correct alignment for the temp data  
+	input->temperature = (double) value * 0.25;
+	// digitalWrite(LCD_CS, lcdState);
 }
 
-void openDoor(void){ //currently a dummy function
-	//use servo to open door fully
+void openDoor(void){ 
+	//use servo to open door as much as the servo will allow, also turns on a red indicator led
 	digitalWrite(RED, HIGH);
-	doorServo.write(180);
-	
+	for (servoPos; servoPos<180; servoPos++){
+		doorServo.write(servoPos);
+		delay(100);
+	}
 }
 
-void closeDoor(void){//currently a dummy function
+void closeDoor(void){
 	//use servo to fully close door
-	doorServo.write(0);
+	for (servoPos; servoPos>0; servoPos--){
+		doorServo.write(servoPos);
+		delay(100);
+	}
+	
 }
 
 void indicateDone(bool errorFlag = false){//currently a dummy function
@@ -272,15 +274,8 @@ void indicateDone(bool errorFlag = false){//currently a dummy function
 
 void updateSetpoints(reflowState& ovenState, reflowProfile Profile, currentParameters& Params, PID& PID, PIDprofile PIDprofile){ //This function updates the setpoints of the reflow profile at the specified updateTime (which is counted in 100usec ticks)
 	uint32_t timeSinceUpdate = timerTicks-lastTimerTicks;
-	// Serial.print("timeSinceUpdate: ");
-	// Serial.println(timeSinceUpdate);
-	// Serial.print("timerTicks: ");
-	// Serial.println(timerTicks);
-	// Serial.print("lastTimerTicks: ");
-	// Serial.println(lastTimerTicks);
-	if (timeSinceUpdate>updateTime){
-		// Serial.println("updating");
-		if (ovenState>Idle && ovenState<RampDown){
+	if (timeSinceUpdate>updateTime){//checks to see if there has been enough time since the last update to once again update the setpoints.
+		if (ovenState>Idle && ovenState<RampDown){//Checks the reflow to see if it is in the heat up phase and adjusts the setpoints according to the programed profile.
 			switch(ovenState) {
 				case RampToSoak:
 					Params.setpoint += Profile.rampSoakRate*double(timeSinceUpdate)*(uSecPerSec);
@@ -312,7 +307,7 @@ void updateSetpoints(reflowState& ovenState, reflowProfile Profile, currentParam
 				break;
 			}
 		}
-		else if (ovenState>=RampDown && ovenState<Complete){
+		else if (ovenState>=RampDown && ovenState<Complete){// This section of the code deal with the cooling portion of the reflow process
 			switch(ovenState) {
 				case RampDown:
 					Params.setpoint -= Profile.coolDownRate*double(timeSinceUpdate)*(uSecPerSec);
@@ -341,8 +336,8 @@ void updateSetpoints(reflowState& ovenState, reflowProfile Profile, currentParam
 
 }
 
-void rollAverage(rollingAvg& rollAvg, currentParameters& Params, volatile errorCode& ErrorCode){//takes a new temperature reading and averages it with the previous 9 readings, this function pulls the temperatures as fast as the function is reached
-	uint32_t timeSinceUpdate = timerTicks-lastThermoUpdate;
+void rollAverage(rollingAvg& rollAvg, currentParameters& Params, volatile errorCode& ErrorCode){//takes a new temperature reading and averages it with the previous 9 readings
+	uint32_t timeSinceUpdate = timerTicks-lastThermoUpdate;//The main loop is faster than the update time of the MAX31855 IC so a delay had to be added
 	static uint8_t errorTempCount = 0;
 	double curReading;
 	if (timeSinceUpdate>thermoUpdateTime){
@@ -361,14 +356,14 @@ void rollAverage(rollingAvg& rollAvg, currentParameters& Params, volatile errorC
 		
 		//the next few lines handle the averaging of the temperature *note that only one value is removed and added at a time to save caluclation cycles
 		
-		Params.avgTemp -= rollAvg.temps[rollAvg.position]/10.0; //removes the reading that was at this postion previousl (the average adjusted amount)
+		Params.avgTemp -= rollAvg.temps[rollAvg.position]/10.0; //removes the reading that was at this postion previously (the average adjusted amount)
 		rollAvg.temps[rollAvg.position] = curReading;
 		Params.avgTemp += curReading/10.0; //adds in the current reading into the average
 		rollAvg.position ++;
 		if (rollAvg.position > 9){
 			rollAvg.position = 0;
 		}
-		curReading = Params.avgTemp - Params.setpoint;//repurpose the curReading variable to see if the current average is too far from the setpoint
+		curReading = Params.avgTemp - Params.setpoint;//repurpose the curReading variable to see if the current average is too far from the setpoint, it is being repurposed because I am getting close to the heap limit
 		if (curReading>50.0 || curReading<-50.0){
 			if (curReading>10){
 				ErrorCode = OverTemp;
@@ -385,7 +380,7 @@ void rollAverage(rollingAvg& rollAvg, currentParameters& Params, volatile errorC
 	
 }
 
-void pinSetup(){
+void pinSetup(){//Self explanitory, sets up the pin configuration for proper communication and control
 	pinMode(THERMOCOUPLE1_CS, OUTPUT);
 	digitalWrite(THERMOCOUPLE1_CS, HIGH);
 	pinMode(THERMOCOUPLE2_CS, OUTPUT);
@@ -398,7 +393,7 @@ void pinSetup(){
 	digitalWrite(PIN_FAN, LOW);
 	pinMode(RED, OUTPUT);
 	digitalWrite(RED, LOW);
-	// pinMode(GREEN, OUTPUT);
+	// pinMode(GREEN, OUTPUT); //The green LED is hooked up to the TX of the Arduino's serial (They share the same pin) so if a serial output is desired the serial communications must be turned off to function correctly
 	// digitalWrite(GREEN, LOW);
 	pinMode(LCD_CS, OUTPUT);
 	digitalWrite(LCD_CS, HIGH);
@@ -416,7 +411,7 @@ void pinSetup(){
 
 double initalTemp(rollingAvg& rollAvg, volatile errorCode ErrorCode){//Gets an intial value for the oven temperature
 	double averageTemp = 0;
-	for (uint8_t i = 0; i <10; i++){
+	for (uint8_t i = 0; i <10; i++){//the full array is loaded on initalization to ensure a decent average
 		readThermocouple(&thermoInput1, ErrorCode);
 		rollAvg.temps[i] = thermoInput1.temperature;
 		averageTemp += thermoInput1.temperature/10.0;
@@ -426,14 +421,14 @@ double initalTemp(rollingAvg& rollAvg, volatile errorCode ErrorCode){//Gets an i
 	return averageTemp;
 }
 
-void updatePID(PID& PID, currentParameters Params, volatile cyclCount& cycleSet, volatile bool& update){//updates the PID output and set up the next 1/2sec of heater function (which runns on a % of the 30 AC cycles that should happen in that time)
+void updatePID(PID& PID, currentParameters Params, volatile cycleCount& cycleSet, volatile bool& update){//updates the PID output and set up the next 1/2sec of heater function (which runns on a % of the 30 AC cycles that should happen in that time)
 	//this code only responds to changes in 3% on time segments, so a change of at least 3% is needed to see an effect (i.e. 90%=91%=92%<93%)
 	uint8_t intOutput;
 	uint32_t now = millis();
 	cli(); //interrupts are disabled here because they were interferring with the serial print function
 	if(update){
-        // PID.SetSampleTime(now-lastPIDticks);
-        PID.Compute(); //the output is set from 0-33, so that each whole number change of the PID actually has an effect on heater on time
+		// PID.SetSampleTime(now-lastPIDticks);
+		PID.Compute(); //the output is set from 0-33, so that each whole number change of the PID actually has an effect on heater on time
 		intOutput = int(Params.PID_output)*3; //this makes it so the next part sees a number from 0-99%
 		// Serial.println("Params.PID_output");
 		// Serial.println(intOutput);
@@ -447,7 +442,7 @@ void updatePID(PID& PID, currentParameters Params, volatile cyclCount& cycleSet,
 		Serial.print(",");
 		Serial.println(Params.avgTemp);
 		cycleSet.tensPlace = intOutput / 10; //the 30 cycles are divided into 3 10 subcycle segments, with the tens place indicating how many of each of the 3 subcycles will be on for (0%-9% = 0; 10%-19% = 1 ... 90%-99% = 9; and 100% does not exist technically but is functionally the same as a 99%)
-		cycleSet.thirds = (intOutput % 10) / 3; //will turn on an extra cycle based on the ones place of the PID output. (0%-2% = 0 extra cycles; 3%-5% = 1 extra cycles ... 7%-9% = 3 extra cycles: this end up meaning that 9% and 10%; 19% and 20%; etc. are equivilent in terms of heater on time)
+		cycleSet.thirds = (intOutput % 10) / 3; //will turn on an extra cycle based on the ones place of the PID output. (0%-2% = 0 extra cycles; 3%-5% = 1 extra cycles ... 7%-9% = 3 extra cycles: this ends up meaning that 9% and 10%; 19% and 20%; etc. are equivilent in terms of heater on time)
 		cycleSet.positionThirds = 0;
 		cycleSet.positionTens = 0;
 		update = false;
@@ -516,13 +511,13 @@ void checkErrors(volatile errorCode ErrorCode){//This function checks for any re
 
 void timerISR(void){//The timer is used for the ZeroX calibration and to turn off the relay slightly before the zeroX event to ensure the triac stays off when it is supposed to
 #ifdef ZERO_X_CALIBRATION 
-    if(!calibrationFinished){
-        timerTicks++;
+	if(!calibrationFinished){
+		timerTicks++;
 	}
-    else {
+	else {
 #endif
 		if(offCounter && (offTimerTicks > usecPerZX - 10 )){//turns the relay off about 1ms before the start of an off cycle to ensure the triac stays off
-		//currently the code will go through the offTimer code EVERY time the next cycle is supposed off, this is inefficent but does not cause a problem in the 16MHz Arduinos tested, slower clocked chips may encounter problems (this is untested though)
+		//currently the code will go through the offTimer code EVERY time the next cycle is supposed to be off, this is inefficent but does not cause a problem in the 16MHz Arduinos tested, slower clocked chips may encounter problems (this is untested though)
 			digitalWrite(PIN_HEATER_BOTTOM, LOW);
 			offCounter = false; //the off timer is turned off once it has completed its function.
 			offTimerTicks = 0;
@@ -552,7 +547,7 @@ void zeroXingISR(void){ //This ISR is involved in "PWMing" the heater elements o
 	}
 	else{
 #endif
-		if(!cycleFinished){
+		if(!cycleFinished){//checks to see if the current heating cycle is complete, if it is not then it procedes below and evaluates whether the heaters should be on or off.
 			if(cycleCounter.positionThirds < 3){
 				if(cycleCounter.positionTens < cycleCounter.tensPlace){
 					digitalWrite(PIN_HEATER_BOTTOM, HIGH);
@@ -594,20 +589,18 @@ void setup(){
 	delay(5000); //gives some time to turn on the serial monitor or reupload new code without starting the oven
 	Serial.begin(115200); // Debugging Serial output/data output
 	SPI.begin();
-	
 #ifdef ZERO_X_CALIBRATION
 //This portion calculates how long a ZeroX event takes and uses this value in timing the SSR relay to turn off reliably (a triac will not turn off even if the gate voltage is no longer applied, until a ZeroX event takes place)
-    pinMode(PIN_ZX, INPUT);
+	pinMode(PIN_ZX, INPUT);
 	attachInterrupt(INT_ZX, zeroXingISR, RISING);
-    Timer1.initialize(uSecPerTick);
-    Timer1.attachInterrupt(timerISR);
-	
+	Timer1.initialize(uSecPerTick);
+	Timer1.attachInterrupt(timerISR);
 	//wait for the calibration to run through the required amount of cycles to get a good average
 	while(calibrationCycle<CALIBRATION_CYCLES){
 	}
 	//turn off the calibration portions of the ISRs
 	calibrationFinished = true;
-    Timer1.detachInterrupt();
+	Timer1.detachInterrupt();
 
 	for(uint8_t i=2;i<CALIBRATION_CYCLES;i++){
 		calibrationAvg += (double)calibrationArray[i]/((double)CALIBRATION_CYCLES - 2.0); //the first 2 readings and the last reading in the array are garbage so throw them out
@@ -624,7 +617,7 @@ void setup(){
 	curParameters.setpoint = curParameters.avgTemp;
 	tempPID.SetOutputLimits(0, 33); // set output of heaters, since the heaters can only respont to 3% incraments the range here is set from 0-33 and is later multiplied by 3
 	lastTimerTicks = timerTicks; //counts in 100usec ticks
-    lastPIDticks = millis(); //counts in ms
+	lastPIDticks = millis(); //counts in ms
 	tempPID.SetMode(AUTOMATIC);
 }
 
